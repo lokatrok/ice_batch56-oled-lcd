@@ -1,182 +1,200 @@
+// ====== COUNTDOWN SYSTEM (Optimized + Synchronized Breathing) ======
 
-//=====SETCOUNTDOWN=====
-
-// Di countdown.ino, di bagian atas
+// --- Externs & Enums ---
 extern bool breathingGuideActive;
+extern OledState oledCurrentState;  // tambahkan untuk sinkronisasi LED dengan OLED
 
-// Di countdown.ino, di bagian atas (setelah extern declarations)
 enum BuzzerState {
   BUZZER_OFF,
-  BUZZER_ON
+  BUZZER_ON,
+  BUZZER_PAUSE
 };
 
 BuzzerState buzzerState = BUZZER_OFF;
 unsigned long buzzerTimer = 0;
 int beepCount = 0;
-const int TOTAL_BEEPS = 3;
-const unsigned long BEEP_DURATION = 500; // 500ms ON, 500ms OFF
 
-// Di countdown.ino, di bagian paling atas
-void updateOledDisplay(); // Prototype untuk fungsi dari oled.ino
+constexpr int TOTAL_BEEPS = 3;
+constexpr unsigned long BEEP_DURATION = 500; // ms ON
+constexpr unsigned long PAUSE_DURATION = 500; // ms OFF
 
-// Di countdown.ino, GANTI SELURUH fungsi handleCountdownButton()
+// OLED
+void updateOledDisplay(); // from oled.ino
+
+// --- Countdown Button Handler ---
 void handleCountdownButton() {
   static bool lastButtonState = HIGH;
   static bool stableButtonState = HIGH;
   static unsigned long lastDebounceTime = 0;
-  
+
   bool currentState = digitalRead(COUNTDOWN_BUTTON);
-  
-  // Logika debounce
-  if (currentState != lastButtonState) {
-    lastDebounceTime = millis();
-  }
-  
-  if ((millis() - lastDebounceTime) > 20) { // Diperkecil untuk lebih sensitif
+
+  // Debounce
+  if (currentState != lastButtonState) lastDebounceTime = millis();
+
+  if ((millis() - lastDebounceTime) > 30) {
     if (currentState != stableButtonState) {
       stableButtonState = currentState;
-      
-      // Aksi saat tombol DITEKAN (LOW)
+
+      // Saat ditekan (LOW)
       if (stableButtonState == LOW) {
-        
-        // Jika nilai countdown belum diatur, tampilkan peringatan
+
         if (!valueSet) {
           Serial2.print("tCountTime.txt=\"Set Value\"");
           sendFF();
           return;
         }
 
-        // --- LOGIKA YANG BENAR SESUAI KEINGINAN ANDA ---
+        // === TEKANAN PERTAMA: MULAI COUNTDOWN + BREATHING ===
         if (!isCounting) {
-          // TEKAN PERTAMA: Mulai timer utama saja
           isCounting = true;
-          //digitalWrite(COUNTDOWN_LED, HIGH);
-          prevMillis = millis(); 
-          
-          // Set OLED ke status timer-only
-          oledCurrentState = OLED_TIMER_ONLY;
-          breathingGuideActive = false; // Pastikan panduan pernapasan mati
-          
-        } else {
-          // TEKAN KEDUA, KETIGA, DAN SETERUSNYA: Toggle panduan pernapasan
-          breathingGuideActive = !breathingGuideActive; 
+          prevMillis = millis();
+
+          oledCurrentState = OLED_READY;           // langsung masuk panduan napas
+          breathingGuideActive = true;             // aktifkan LED breathing
+          oledTransitionTimerMillis = millis();
+
+          strip.clear();
+          strip.show();
+
+          buzzerState = BUZZER_OFF;                // reset buzzer
+          beepCount = 0;
+        }
+
+        // === TEKANAN KEDUA, KETIGA, DST: PAUSE / RESUME VISUAL ===
+        else {
+          // Toggle breathing animasi (tanpa hentikan countdown)
+          breathingGuideActive = !breathingGuideActive;
 
           if (breathingGuideActive) {
-            // Nyalakan panduan pernapasan, mulai dari READY
-            oledCurrentState = OLED_READY;
+            oledCurrentState = OLED_READY;         // lanjut animasi
             oledTransitionTimerMillis = millis();
-            
-            // !!! PERBAIKAN KRUSIAL: Paksa tampilan OLED untuk update SEKARANG juga !!!
-            // Ini memastikan "READY" langsung muncul tanpa menunggu loop berikutnya
-            updateOledDisplay(); 
-            
           } else {
-            // Matikan panduan pernapasan
-            oledCurrentState = OLED_STOP;
-            // Paksa update untuk STOP juga agar responsif
-            updateOledDisplay();
+            oledCurrentState = OLED_STOP;          // berhenti visual
           }
+
+          updateOledDisplay();                     // update OLED segera
         }
       }
     }
   }
-  
   lastButtonState = currentState;
 }
 
-// Di countdown.ino
+// --- Countdown Core ---
 void runCountdown() {
-  // Fungsi ini hanya berjalan jika flag isCounting TRUE
-  if (isCounting) {
-    if (millis() - prevMillis >= COUNTDOWN_INTERVAL) {
+  if (isCounting && millis() - prevMillis >= COUNTDOWN_INTERVAL) {
+    if (count > 0) {
       count--;
-      
-      // Update tampilan di Nextion
       Serial2.print("tCountTime.txt=\"");
       Serial2.print(count);
       Serial2.print("\"");
       sendFF();
-      
       prevMillis = millis();
-      
-      // Cek apakah countdown sudah selesai
-      if (count <= 0) {
-        finishCountdown();
-      }
+    } else {
+      finishCountdown();
     }
   }
 }
 
-// Di countdown.ino, GANTI fungsi finishCountdown()
+// --- Countdown Finish Handler ---
 void finishCountdown() {
-  // Hentikan timer utama
   isCounting = false;
-  //digitalWrite(COUNTDOWN_LED, LOW);
 
-  // --- TAMBAHKAN INI UNTUK MEMATIKAN LED ---
+  // 🟢 Matikan efek breathing LED secara halus
+  breathingGuideActive = false;   // hentikan animasi LED
+  for (int fade = BREATH_MAX; fade >= BREATH_MIN; fade -= 5) {
+    for (int i = 0; i < strip.numPixels(); i++) {
+      strip.setPixelColor(i, strip.Color(fade, fade, fade));
+    }
+    strip.show();
+    delay(10);
+  }
   strip.clear();
   strip.show();
-  
-  // Set OLED ke status FINISHED
+
+  // 🧠 Update tampilan OLED seperti biasa
   oledCurrentState = OLED_FINISHED;
   oledTransitionTimerMillis = millis();
-  
-  // Reset flag panduan pernapasan
-  breathingGuideActive = false;
 
-  // Reset ke nilai awal
+  // 🔁 Reset nilai dan tampilkan kembali di Nextion
   count = initialCount;
   Serial2.print("tCountTime.txt=\"");
   Serial2.print(count);
   Serial2.print("\"");
   sendFF();
 
-  // --- MULAI PROSES BUZZER TANPA MEMBLOKIR SISTEM ---
+  // 🔔 Jalankan urutan bunyi buzzer
   beepCount = 0;
   buzzerState = BUZZER_ON;
   buzzerTimer = millis();
-  digitalWrite(BUZZER_PIN, HIGH); // Nyalakan buzzer untuk beep pertama
+  digitalWrite(BUZZER_PIN, HIGH);
 }
 
-// Di countdown.ino, tambahkan fungsi baru ini
+// --- Buzzer Handler ---
 void handleBuzzer() {
-  if (buzzerState == BUZZER_OFF) {
-    return; // Tidak melakukan apa-apa jika buzzer sedang off
-  }
+  if (buzzerState == BUZZER_OFF) return;
 
-  if (millis() - buzzerTimer >= BEEP_DURATION) {
-    if (buzzerState == BUZZER_ON) {
-      // Waktu beep habis, matikan buzzer
-      digitalWrite(BUZZER_PIN, LOW);
+  unsigned long now = millis();
+
+  if (buzzerState == BUZZER_ON && now - buzzerTimer >= BEEP_DURATION) {
+    digitalWrite(BUZZER_PIN, LOW);
+    buzzerState = BUZZER_PAUSE;
+    buzzerTimer = now;
+  } 
+  else if (buzzerState == BUZZER_PAUSE && now - buzzerTimer >= PAUSE_DURATION) {
+    beepCount++;
+    if (beepCount < TOTAL_BEEPS) {
+      digitalWrite(BUZZER_PIN, HIGH);
+      buzzerState = BUZZER_ON;
+      buzzerTimer = now;
+    } else {
       buzzerState = BUZZER_OFF;
-      beepCount++;
-      
-      // Cek apakah masih ada beep yang tersisa
-      if (beepCount < TOTAL_BEEPS) {
-        // Jika ada, atur timer untuk beep berikutnya
-        buzzerTimer = millis();
-        buzzerState = BUZZER_ON;
-        digitalWrite(BUZZER_PIN, HIGH);
-      }
     }
   }
 }
 
-// Di countdown.ino, tambahkan fungsi ini di bagian bawah
+// --- Breathing LED Update (Sinkron dengan OLED State) ---
 void updateBreathingLED() {
-  // Gunakan gelombang sinus untuk transisi yang sangat halus
-  // rumus: sin( (waktu / kecepatan) * 2 * PI )
-  long waktu = millis();
-  float sineValue = (sin(waktu / (float)BREATH_SPEED * 2.0 * PI) + 1.0) / 2.0;
-  
-  // Petakan nilai sinus (0.0 - 1.0) ke rentang kecerahan (BREATH_MIN - BREATH_MAX)
-  int brightness = BREATH_MIN + (int)(sineValue * (BREATH_MAX - BREATH_MIN));
-  
-  // Atur warna (misalnya, warna putih hangat atau biru santai)
-  // Anda bisa ganti R, G, B sesuai keinginan
-  strip.setPixelColor(strip.numPixels(), strip.Color(brightness, brightness, brightness)); // Putih
-  
-  // Isi seluruh strip dengan warna dan kecerahan yang sudah dihitung
-  strip.fill(strip.Color(brightness, brightness, brightness)); // Putih
-  strip.show();
+  if (!breathingGuideActive || oledCurrentState == OLED_FINISHED || !isCounting) {
+    // Matikan LED sepenuhnya jika countdown selesai atau pause
+    strip.clear();
+    strip.show();
+    return;
+  }
+
+  int brightness = BREATH_MIN; // default
+
+  switch (oledCurrentState) {
+    case OLED_READY:
+      brightness = map((millis() % 1000), 0, 1000, BREATH_MIN, BREATH_MAX);
+      break;
+
+    case OLED_INHALE:
+      brightness = BREATH_MIN + (int)((sin((millis() / (float)BREATH_SPEED) * PI)) * (BREATH_MAX - BREATH_MIN));
+      break;
+
+    case OLED_HOLD:
+      brightness = BREATH_MAX;
+      break;
+
+    case OLED_EXHALE:
+      brightness = BREATH_MAX - (int)((sin((millis() / (float)BREATH_SPEED) * PI)) * (BREATH_MAX - BREATH_MIN));
+      break;
+
+    case OLED_STOP:
+    case OLED_FINISHED:
+    case OLED_IDLE:
+      brightness = BREATH_MIN;
+      break;
+
+    default:
+      break;
+  }
+
+for (int i = 0; i < strip.numPixels(); i++) {
+  // Ganti putih menjadi biru
+  strip.setPixelColor(i, strip.Color(0, 0, brightness));
+}
+strip.show();
 }

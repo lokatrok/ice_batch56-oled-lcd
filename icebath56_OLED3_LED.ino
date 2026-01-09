@@ -385,6 +385,10 @@ void setup() {
   }
   display.clearDisplay();
   display.display();
+
+  strip.begin();
+  strip.setBrightness(BRIGHTNESS);
+  strip.show(); // Bersihkan tampilan LED
   
   // Initialize pins
   pinMode(COUNTDOWN_BUTTON, INPUT_PULLUP);
@@ -595,6 +599,8 @@ void loop() {
     updateNextionClock();
     lastClockUpdate = millis();
   }
+
+  
 }
 
 // Save data to EEPROM
